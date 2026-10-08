@@ -1,0 +1,21 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/vite-dev*.log
+
+# Backend
+backend/bin/
+backend/obj/
+backend-api.*.log
+
+# Local settings and editor noise
+.env
+.env.*
+.vs/
+.vscode/
+*.user
+*.suo
+
+# OS files
+Thumbs.db
+.DS_Store

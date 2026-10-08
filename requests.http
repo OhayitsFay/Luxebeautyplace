@@ -1,0 +1,13 @@
+@api = http://127.0.0.1:5117/api
+
+GET {{api}}/health
+
+###
+
+POST {{api}}/admin/login
+content-type: application/json
+
+{
+  "email": "admin@luxebeautyplace.com",
+  "password": "LuxeAdmin2026!"
+}
