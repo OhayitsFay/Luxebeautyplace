@@ -24,15 +24,19 @@ const statusOptions = ['Pending', 'Approved', 'Rescheduled', 'Cancelled', 'Compl
 
 export default function Admin() {
   const [session, setSession] = useState(() => {
-    const saved = localStorage.getItem('luxeAdminSession');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = JSON.parse(localStorage.getItem('luxeAdminSession') || 'null');
+      return saved?.token && new Date(saved.expiresAt).getTime() > Date.now() ? saved : null;
+    } catch {
+      return null;
+    }
   });
   const [setupRequired, setSetupRequired] = useState(null);
   const [authMode, setAuthMode] = useState('login');
   const [login, setLogin] = useState({ email: '', password: '' });
   const [register, setRegister] = useState({ fullName: '', email: '', phone: '', password: '', setupCode: '', repairExisting: false });
   const [newAdmin, setNewAdmin] = useState(emptyAdmin);
-  const [forgot, setForgot] = useState({ email: '', resetToken: '', newPassword: '' });
+  const [forgot, setForgot] = useState({ email: '', setupCode: '', resetToken: '', newPassword: '' });
   const [changePassword, setChangePassword] = useState({ currentPassword: '', newPassword: '' });
   const [loginError, setLoginError] = useState('');
   const [services, setServices] = useState([]);
@@ -55,6 +59,7 @@ export default function Admin() {
       })
       .catch(() => {
         setSetupRequired(false);
+        setLoginError('Cannot reach the API. Start the backend before signing in or creating an admin.');
       });
   }, []);
 
@@ -75,7 +80,11 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    loadAdminData().catch(() => {
+    loadAdminData().catch((error) => {
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        localStorage.removeItem('luxeAdminSession');
+        setSession(null);
+      }
       setNotice('Could not load admin data. Check that the API is running and your session is valid.');
     });
   }, [session?.token]);
@@ -113,8 +122,8 @@ export default function Admin() {
       setLogin({ email: register.email, password: '' });
       setRegister({ fullName: '', email: '', phone: '', password: '', setupCode: '', repairExisting: false });
       setNotice('Admin account created. Sign in with the new password.');
-    } catch {
-      setLoginError('Admin setup failed. Check the setup code. If an old admin already exists, enable the repair option.');
+    } catch (error) {
+      setLoginError(error.response?.data?.message || 'Admin setup failed. Check the setup code or sign in to the existing account.');
     }
   };
 
@@ -148,16 +157,26 @@ export default function Admin() {
     setSession(null);
   };
 
+  useEffect(() => {
+    if (!session?.expiresAt) return;
+    const timer = window.setTimeout(() => {
+      localStorage.removeItem('luxeAdminSession');
+      setSession(null);
+      setLoginError('Your session expired. Please sign in again.');
+    }, Math.max(0, new Date(session.expiresAt).getTime() - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [session?.expiresAt]);
+
   const requestPasswordReset = async (event) => {
     event.preventDefault();
     setLoginError('');
 
     try {
-      const response = await api.post('/admin/forgot-password', { email: forgot.email });
+      const response = await api.post('/admin/forgot-password', { email: forgot.email, setupCode: forgot.setupCode });
       setForgot((current) => ({ ...current, resetToken: response.data.resetToken ?? '' }));
       setNotice(response.data.resetToken ? 'Reset code created and filled in for local development.' : response.data.message);
-    } catch {
-      setLoginError('Could not create a reset code right now.');
+    } catch (error) {
+      setLoginError(error.response?.data?.message || 'Could not create a reset code. Check the setup code and API connection.');
     }
   };
 
@@ -169,7 +188,7 @@ export default function Admin() {
       await api.post('/admin/reset-password', forgot);
       setAuthMode('login');
       setLogin({ email: forgot.email, password: '' });
-      setForgot({ email: '', resetToken: '', newPassword: '' });
+      setForgot({ email: '', setupCode: '', resetToken: '', newPassword: '' });
       setNotice('Password reset. Sign in with the new password.');
     } catch {
       setLoginError('Password reset failed. Check the reset code.');
@@ -212,7 +231,16 @@ export default function Admin() {
     setEditingServiceId(null);
   };
 
-  const submitService = async (event) => {
+  const runAction = (action) => async (...args) => {
+    try {
+      await action(...args);
+    } catch (error) {
+      setNotice(error.response?.data?.message || 'The action could not be saved. Check the API connection and sign in again if your session expired.');
+      if (error.response?.status === 401) logout();
+    }
+  };
+
+  const submitService = runAction(async (event) => {
     event.preventDefault();
     const payload = {
       ...serviceForm,
@@ -230,7 +258,7 @@ export default function Admin() {
 
     resetServiceForm();
     await loadAdminData();
-  };
+  });
 
   const editService = (service) => {
     setEditingServiceId(service.serviceId);
@@ -245,29 +273,31 @@ export default function Admin() {
     });
   };
 
-  const deleteService = async (serviceId) => {
+  const deleteService = runAction(async (serviceId) => {
+    if (!window.confirm('Delete this service? This cannot be undone.')) return;
     await api.delete(`/services/${serviceId}`, authConfig);
     setNotice('Service deleted.');
     await loadAdminData();
-  };
+  });
 
-  const setTestimonialStatus = async (testimonialId, status) => {
+  const setTestimonialStatus = runAction(async (testimonialId, status) => {
     await api.patch(`/testimonials/${testimonialId}/status/${status}`, null, authConfig);
     setNotice(`Review ${status.toLowerCase()}.`);
     await loadAdminData();
-  };
+  });
 
-  const deleteTestimonial = async (testimonialId) => {
+  const deleteTestimonial = runAction(async (testimonialId) => {
+    if (!window.confirm('Delete this review? This cannot be undone.')) return;
     await api.delete(`/testimonials/${testimonialId}`, authConfig);
     setNotice('Review deleted.');
     await loadAdminData();
-  };
+  });
 
-  const setAppointmentStatus = async (appointmentId, status) => {
+  const setAppointmentStatus = runAction(async (appointmentId, status) => {
     await api.patch(`/appointments/${appointmentId}/status/${status}`, null, authConfig);
     setNotice(`Booking marked ${status.toLowerCase()}.`);
     await loadAdminData();
-  };
+  });
 
   if (!session?.token) {
     return (
@@ -297,10 +327,6 @@ export default function Admin() {
                 Setup code
                 <input required name="setupCode" value={register.setupCode} onChange={updateRegister} />
               </label>
-              <label className="check-row">
-                <input type="checkbox" name="repairExisting" checked={register.repairExisting} onChange={updateRegister} />
-                Replace existing local admin login if setup is stuck
-              </label>
               <button className="button full" type="submit">Create Admin</button>
               {setupRequired === false && (
                 <button className="text-button" type="button" onClick={() => setAuthMode('login')}>Back to sign in</button>
@@ -315,6 +341,10 @@ export default function Admin() {
                   <input required type="email" name="email" value={forgot.email} onChange={updateForgot} autoComplete="username" />
                 </label>
                 <button className="button full" type="submit">Get Reset Code</button>
+                <label>
+                  Server setup code (local recovery only)
+                  <input required type="password" name="setupCode" value={forgot.setupCode} onChange={updateForgot} autoComplete="off" />
+                </label>
               </form>
               <form className="admin-form" onSubmit={submitPasswordReset}>
                 <label>
@@ -395,7 +425,7 @@ export default function Admin() {
             <div className="field-row">
               <label>
                 Price
-                <input required min="0" type="number" name="price" value={serviceForm.price} onChange={updateServiceForm} />
+              <input required min="0" step="0.01" type="number" name="price" value={serviceForm.price} onChange={updateServiceForm} />
               </label>
               <label>
                 Price label

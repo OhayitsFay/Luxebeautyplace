@@ -54,7 +54,7 @@ export default function Layout() {
         <div className="social-row">
           <a href="https://instagram.com/luxebeautyplace" aria-label="Instagram luxebeautyplace"><Instagram size={18} /> luxebeautyplace</a>
           <a href="https://tiktok.com/@luxebeautyplace" aria-label="TikTok luxebeautyplace">TikTok</a>
-          <a href="https://wa.me/" aria-label="WhatsApp"><MessageCircle size={18} /> WhatsApp</a>
+          <a href="https://wa.me/2348153144870" aria-label="WhatsApp"><MessageCircle size={18} /> WhatsApp</a>
           <Link className="staff-entry" to="/admin" aria-label="Staff sign in">
             <KeyRound size={16} />
           </Link>

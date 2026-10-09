@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { CalendarDays } from 'lucide-react';
 import { formatCurrency } from '../data/salonData.js';
+import { normalizeImageUrl } from '../api/mappers.js';
 
 const fallbackImage = '/service-images/photo_2026-08-20_18-30-46.jpg';
 
@@ -8,10 +9,10 @@ export default function ServiceCard({ service }) {
   return (
     <article className="service-card">
       <img
-        src={service.image || fallbackImage}
+        src={normalizeImageUrl(service.image)}
         alt={service.name}
         onError={(event) => {
-          event.currentTarget.src = fallbackImage;
+          if (!event.currentTarget.src.endsWith(fallbackImage)) event.currentTarget.src = fallbackImage;
         }}
       />
       <div className="service-card-body">

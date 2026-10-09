@@ -7,13 +7,16 @@ GO
 USE LuxeBeautyPlace;
 GO
 
-IF OBJECT_ID(N'dbo.Appointments', N'U') IS NOT NULL DROP TABLE dbo.Appointments;
-IF OBJECT_ID(N'dbo.Testimonials', N'U') IS NOT NULL DROP TABLE dbo.Testimonials;
-IF OBJECT_ID(N'dbo.GalleryPhotos', N'U') IS NOT NULL DROP TABLE dbo.GalleryPhotos;
-IF OBJECT_ID(N'dbo.Products', N'U') IS NOT NULL DROP TABLE dbo.Products;
-IF OBJECT_ID(N'dbo.Services', N'U') IS NOT NULL DROP TABLE dbo.Services;
-IF OBJECT_ID(N'dbo.Users', N'U') IS NOT NULL DROP TABLE dbo.Users;
-GO
+-- This reset script is for a NEW database only. Never erase existing salon data.
+IF OBJECT_ID(N'dbo.Users', N'U') IS NOT NULL
+   OR OBJECT_ID(N'dbo.Services', N'U') IS NOT NULL
+   OR OBJECT_ID(N'dbo.Appointments', N'U') IS NOT NULL
+   OR OBJECT_ID(N'dbo.Testimonials', N'U') IS NOT NULL
+   OR OBJECT_ID(N'dbo.Products', N'U') IS NOT NULL
+   OR OBJECT_ID(N'dbo.GalleryPhotos', N'U') IS NOT NULL
+BEGIN
+    ;THROW 51000, 'Existing salon tables detected. Use normal API startup; this script is only for a new database.', 1;
+END
 
 CREATE TABLE Users (
     UserID INT IDENTITY(1,1) PRIMARY KEY,
@@ -32,7 +35,7 @@ CREATE TABLE Services (
     Price DECIMAL(18,2) NOT NULL,
     PriceLabel NVARCHAR(80) NOT NULL DEFAULT '',
     Duration INT NOT NULL,
-    ImageURL NVARCHAR(600) NULL
+    ImageURL NVARCHAR(600) NOT NULL DEFAULT ''
 );
 
 CREATE TABLE Products (

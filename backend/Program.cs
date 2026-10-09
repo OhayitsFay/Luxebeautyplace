@@ -24,6 +24,8 @@ builder.Services.AddDbContext<SalonDbContext>(options =>
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? throw new InvalidOperationException("Missing Jwt:Issuer.");
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? throw new InvalidOperationException("Missing Jwt:Audience.");
 var jwtSigningKey = builder.Configuration["Jwt:SigningKey"] ?? throw new InvalidOperationException("Missing Jwt:SigningKey.");
+if (Encoding.UTF8.GetByteCount(jwtSigningKey) < 32)
+    throw new InvalidOperationException("Jwt:SigningKey must contain at least 32 UTF-8 bytes.");
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -40,7 +42,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = signingKey
         };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser().RequireRole("Admin").Build();
+});
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -76,7 +82,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment()) app.UseHttpsRedirection();
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
@@ -160,7 +166,9 @@ api.MapPost("/admin/setup-admin", async (AdminRegisterRequest request, SalonDbCo
         .FirstOrDefaultAsync();
 
     var existingEmailOwner = await db.Users.SingleOrDefaultAsync(user => user.Email == email);
-    if (existingEmailOwner is not null && firstAdmin is not null && existingEmailOwner.UserId != firstAdmin.UserId)
+    if (firstAdmin is not null)
+        return Results.Conflict(new { message = "An admin already exists. Sign in or use password reset instead." });
+    if (existingEmailOwner is not null)
     {
         return Results.Conflict(new { message = "That email is already registered to another account." });
     }
@@ -215,6 +223,8 @@ api.MapPost("/admin/accounts", async (CreateAdminRequest request, SalonDbContext
 
 api.MapPost("/admin/login", async (AdminLoginRequest login, SalonDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(login.Email) || string.IsNullOrWhiteSpace(login.Password))
+        return Results.BadRequest(new { message = "Email and password are required." });
     var email = login.Email.Trim().ToLowerInvariant();
     var user = await db.Users.SingleOrDefaultAsync(user => user.Email == email && user.Role == UserRole.Admin);
 
@@ -230,12 +240,14 @@ api.MapPost("/admin/login", async (AdminLoginRequest login, SalonDbContext db) =
         token = new JwtSecurityTokenHandler().WriteToken(token),
         email = user.Email,
         fullName = user.FullName,
-        expiresAt = token.ValidTo
+        expiresAt = DateTime.SpecifyKind(token.ValidTo, DateTimeKind.Utc)
     });
 });
 
 api.MapPost("/admin/change-password", async (ChangePasswordRequest request, ClaimsPrincipal principal, SalonDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+        return Results.BadRequest(new { message = "The new password must be at least 8 characters." });
     var email = principal.FindFirstValue(JwtRegisteredClaimNames.Sub) ??
         principal.FindFirstValue(ClaimTypes.NameIdentifier);
     if (email is null) return Results.Unauthorized();
@@ -251,8 +263,14 @@ api.MapPost("/admin/change-password", async (ChangePasswordRequest request, Clai
     return Results.NoContent();
 }).RequireAuthorization();
 
-api.MapPost("/admin/forgot-password", async (ForgotPasswordRequest request, SalonDbContext db, IWebHostEnvironment environment) =>
+api.MapPost("/admin/forgot-password", async (ForgotPasswordRequest request, SalonDbContext db, IWebHostEnvironment environment, IConfiguration configuration) =>
 {
+    // Local recovery is not an email-delivery service. Require the server owner's setup code.
+    if (!environment.IsDevelopment())
+        return Results.Json(new { message = "Password recovery is not configured. Contact another administrator." }, statusCode: 503);
+    var setupCode = configuration["Admin:SetupCode"];
+    if (string.IsNullOrWhiteSpace(setupCode) || request.SetupCode != setupCode) return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(request.Email)) return Results.BadRequest();
     var email = request.Email.Trim().ToLowerInvariant();
     var user = await db.Users.SingleOrDefaultAsync(user => user.Email == email && user.Role == UserRole.Admin);
 
@@ -273,6 +291,10 @@ api.MapPost("/admin/forgot-password", async (ForgotPasswordRequest request, Salo
 
 api.MapPost("/admin/reset-password", async (ResetPasswordRequest request, SalonDbContext db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.ResetToken))
+        return Results.BadRequest();
+    if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+        return Results.BadRequest(new { message = "The new password must be at least 8 characters." });
     var email = request.Email.Trim().ToLowerInvariant();
     if (!resetTokens.TryGetValue(email, out var entry) ||
         entry.ExpiresAt < DateTimeOffset.UtcNow ||
@@ -303,6 +325,9 @@ api.MapGet("/services/{id:int}", async (int id, SalonDbContext db) =>
 
 api.MapPost("/services", async (Service service, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidService(service))
+        return Results.BadRequest(new { message = "Service name, nonnegative price, and positive duration are required." });
+    service.Appointments = [];
     db.Services.Add(service);
     await db.SaveChangesAsync();
     return Results.Created($"/api/services/{service.ServiceId}", service);
@@ -310,6 +335,8 @@ api.MapPost("/services", async (Service service, SalonDbContext db) =>
 
 api.MapPut("/services/{id:int}", async (int id, Service updated, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidService(updated))
+        return Results.BadRequest(new { message = "Service name, nonnegative price, and positive duration are required." });
     var service = await db.Services.FindAsync(id);
     if (service is null) return Results.NotFound();
 
@@ -330,6 +357,8 @@ api.MapDelete("/services/{id:int}", async (int id, SalonDbContext db) =>
     var service = await db.Services.FindAsync(id);
     if (service is null) return Results.NotFound();
 
+    if (await db.Appointments.AnyAsync(appointment => appointment.ServiceId == id))
+        return Results.Conflict(new { message = "This service has bookings and cannot be deleted." });
     db.Services.Remove(service);
     await db.SaveChangesAsync();
     return Results.NoContent();
@@ -340,6 +369,7 @@ api.MapGet("/products", async (SalonDbContext db) =>
 
 api.MapPost("/products", async (Product product, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidProduct(product)) return Results.BadRequest(new { message = "Valid product details, nonnegative price and stock are required." });
     db.Products.Add(product);
     await db.SaveChangesAsync();
     return Results.Created($"/api/products/{product.ProductId}", product);
@@ -347,6 +377,7 @@ api.MapPost("/products", async (Product product, SalonDbContext db) =>
 
 api.MapPut("/products/{id:int}", async (int id, Product updated, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidProduct(updated)) return Results.BadRequest(new { message = "Valid product details, nonnegative price and stock are required." });
     var product = await db.Products.FindAsync(id);
     if (product is null) return Results.NotFound();
 
@@ -372,6 +403,15 @@ api.MapDelete("/products/{id:int}", async (int id, SalonDbContext db) =>
 
 api.MapPost("/appointments", async (Appointment appointment, SalonDbContext db) =>
 {
+    if (!await db.Services.AnyAsync(service => service.ServiceId == appointment.ServiceId))
+        return Results.BadRequest(new { message = "Select a valid service." });
+    if (!RequestValidator.RequiredText(appointment.FullName, 160) || !RequestValidator.ValidEmail(appointment.Email) ||
+        !RequestValidator.RequiredText(appointment.Phone, 40) || appointment.Stylist?.Length > 120 ||
+        appointment.AppointmentDate < DateOnly.FromDateTime(DateTime.Today))
+        return Results.BadRequest(new { message = "Contact details and a date today or later are required." });
+    appointment.UserId = null;
+    appointment.User = null;
+    appointment.Service = null;
     appointment.Status = AppointmentStatus.Pending;
     db.Appointments.Add(appointment);
     await db.SaveChangesAsync();
@@ -387,6 +427,7 @@ api.MapGet("/appointments", async (SalonDbContext db) =>
 
 api.MapPatch("/appointments/{id:int}/status/{status}", async (int id, AppointmentStatus status, SalonDbContext db) =>
 {
+    if (!Enum.IsDefined(status)) return Results.BadRequest(new { message = "Invalid booking status." });
     var appointment = await db.Appointments.FindAsync(id);
     if (appointment is null) return Results.NotFound();
 
@@ -397,6 +438,11 @@ api.MapPatch("/appointments/{id:int}/status/{status}", async (int id, Appointmen
 
 api.MapPost("/testimonials", async (Testimonial testimonial, SalonDbContext db) =>
 {
+    if (!RequestValidator.RequiredText(testimonial.Name, 160) || string.IsNullOrWhiteSpace(testimonial.Review) ||
+        testimonial.Rating < 1 || testimonial.Rating > 5)
+        return Results.BadRequest(new { message = "Name, review, and a rating from 1 to 5 are required." });
+    testimonial.UserId = null;
+    testimonial.User = null;
     testimonial.Status = ReviewStatus.Pending;
     db.Testimonials.Add(testimonial);
     await db.SaveChangesAsync();
@@ -411,6 +457,7 @@ api.MapGet("/admin/testimonials", async (SalonDbContext db) =>
 
 api.MapPatch("/testimonials/{id:int}/status/{status}", async (int id, ReviewStatus status, SalonDbContext db) =>
 {
+    if (!Enum.IsDefined(status)) return Results.BadRequest(new { message = "Invalid review status." });
     var testimonial = await db.Testimonials.FindAsync(id);
     if (testimonial is null) return Results.NotFound();
 
@@ -434,6 +481,8 @@ api.MapGet("/gallery", async (SalonDbContext db) =>
 
 api.MapPost("/gallery", async (GalleryPhoto photo, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidPhoto(photo)) return Results.BadRequest(new { message = "Title, category and image URL are required." });
+    photo.CreatedAt = DateTime.UtcNow;
     db.GalleryPhotos.Add(photo);
     await db.SaveChangesAsync();
     return Results.Created($"/api/gallery/{photo.GalleryPhotoId}", photo);
@@ -441,6 +490,7 @@ api.MapPost("/gallery", async (GalleryPhoto photo, SalonDbContext db) =>
 
 api.MapPut("/gallery/{id:int}", async (int id, GalleryPhoto updated, SalonDbContext db) =>
 {
+    if (!RequestValidator.ValidPhoto(updated)) return Results.BadRequest(new { message = "Title, category and image URL are required." });
     var photo = await db.GalleryPhotos.FindAsync(id);
     if (photo is null) return Results.NotFound();
 
@@ -493,6 +543,8 @@ static async Task EnsureDatabaseShapeAsync(SalonDbContext db)
 
 static async Task SyncServiceCatalogAsync(SalonDbContext db)
 {
+    // Seed only an empty catalog; preserve dashboard edits on restart.
+    if (await db.Services.AnyAsync()) return;
     var catalogNames = ServiceCatalog.Services.Select(service => service.ServiceName).ToHashSet();
     var existingServices = await db.Services.OrderBy(service => service.ServiceId).ToListAsync();
     var needsSync = existingServices.Count != ServiceCatalog.Services.Count ||
@@ -532,6 +584,9 @@ static async Task SyncServiceCatalogAsync(SalonDbContext db)
 
 static async Task EnsureDefaultAdminAsync(SalonDbContext db, IConfiguration configuration)
 {
+    if (await db.Users.AnyAsync(user => user.Role == UserRole.Admin)) return;
+    if (string.IsNullOrWhiteSpace(configuration["Admin:DefaultEmail"]) ||
+        string.IsNullOrWhiteSpace(configuration["Admin:DefaultPassword"])) return;
     var email = (configuration["Admin:DefaultEmail"] ?? "admin@luxebeautyplace.com").Trim().ToLowerInvariant();
     var password = configuration["Admin:DefaultPassword"] ?? "LuxeAdmin2026!";
     var fullName = configuration["Admin:DefaultFullName"] ?? "Luxe Beauty Admin";
@@ -609,7 +664,8 @@ static void LoadEnvironmentFile(string path)
         var value = trimmed[(separatorIndex + 1)..].Trim().Trim('"');
         if (string.IsNullOrWhiteSpace(key)) continue;
 
-        Environment.SetEnvironmentVariable(key, value);
+        if (Environment.GetEnvironmentVariable(key) is null)
+            Environment.SetEnvironmentVariable(key, value);
     }
 }
 
@@ -617,7 +673,7 @@ public record AdminLoginRequest(string Email, string Password);
 public record AdminRegisterRequest(string FullName, string Email, string Phone, string Password, string SetupCode);
 public record CreateAdminRequest(string FullName, string Email, string Phone, string Password);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
-public record ForgotPasswordRequest(string Email);
+public record ForgotPasswordRequest(string Email, string? SetupCode);
 public record ResetPasswordRequest(string Email, string ResetToken, string NewPassword);
 public record PasswordResetEntry(string Token, DateTimeOffset ExpiresAt);
 
@@ -636,23 +692,49 @@ public static class PasswordHasher
 
     public static bool Verify(string password, string passwordHash)
     {
+        if (string.IsNullOrEmpty(password) || string.IsNullOrEmpty(passwordHash)) return false;
         var parts = passwordHash.Split('.');
         if (parts.Length != 4 || parts[0] != "pbkdf2-sha256") return false;
-        if (!int.TryParse(parts[1], out var iterations)) return false;
-
-        var salt = Convert.FromBase64String(parts[2]);
-        var expectedKey = Convert.FromBase64String(parts[3]);
-        var actualKey = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, expectedKey.Length);
-        return CryptographicOperations.FixedTimeEquals(actualKey, expectedKey);
+        if (!int.TryParse(parts[1], out var iterations) || iterations < 1 || iterations > 1_000_000) return false;
+        try
+        {
+            var salt = Convert.FromBase64String(parts[2]);
+            var expectedKey = Convert.FromBase64String(parts[3]);
+            if (salt.Length != SaltSize || expectedKey.Length != KeySize) return false;
+            var actualKey = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, KeySize);
+            return CryptographicOperations.FixedTimeEquals(actualKey, expectedKey);
+        }
+        catch (FormatException) { return false; }
     }
 }
 
 public static class AdminRequestValidator
 {
     public static bool IsValid(string fullName, string email, string phone, string password) =>
-        !string.IsNullOrWhiteSpace(fullName) &&
-        !string.IsNullOrWhiteSpace(email) &&
-        !string.IsNullOrWhiteSpace(phone) &&
+        RequestValidator.RequiredText(fullName, 160) &&
+        RequestValidator.ValidEmail(email) &&
+        RequestValidator.RequiredText(phone, 40) &&
         !string.IsNullOrWhiteSpace(password) &&
         password.Length >= 8;
+}
+
+public static class RequestValidator
+{
+    public static bool RequiredText(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength;
+
+    public static bool ValidEmail(string? email) => RequiredText(email, 256) &&
+        System.Net.Mail.MailAddress.TryCreate(email, out var address) && address.Address == email!.Trim();
+
+    public static bool ValidService(Service service) => RequiredText(service.ServiceName, 160) &&
+        service.Category is not null && service.Category.Length <= 120 &&
+        service.Description is not null && service.PriceLabel is not null && service.PriceLabel.Length <= 80 &&
+        service.ImageUrl is not null && service.ImageUrl.Length <= 600 && service.Price >= 0 && service.Duration > 0;
+
+    public static bool ValidProduct(Product product) => RequiredText(product.ProductName, 160) &&
+        product.Description is not null && product.Price >= 0 && product.StockQuantity >= 0 &&
+        product.ImageUrl is not null && product.ImageUrl.Length <= 600;
+
+    public static bool ValidPhoto(GalleryPhoto photo) => RequiredText(photo.Title, 160) &&
+        RequiredText(photo.Category, 80) && RequiredText(photo.ImageUrl, 600);
 }

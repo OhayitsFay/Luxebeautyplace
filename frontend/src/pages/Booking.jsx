@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { mapServiceFromApi, normalizeImageUrl } from '../api/mappers.js';
-import { addBooking } from '../store/salonSlice.js';
 
 export default function Booking() {
   const { serviceId } = useParams();
-  const dispatch = useDispatch();
   const fallbackServices = useSelector((state) => state.salon.services);
   const [services, setServices] = useState(fallbackServices);
-  const imageByName = new Map(fallbackServices.map((service) => [service.name, service.image]));
-  const selectedService = services.find((service) => service.id === serviceId) ?? services[0];
+  const routeService = serviceId
+    ? services.find((service) => service.id === serviceId || service.name === fallbackServices.find((item) => item.id === serviceId)?.name)
+    : services[0];
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    serviceId: selectedService.id,
+    serviceId: routeService?.id ?? '',
     date: '',
     time: '',
     stylist: '',
@@ -24,6 +23,7 @@ export default function Booking() {
     phone: '',
     notes: ''
   });
+  const selectedService = services.find((service) => service.id === form.serviceId) ?? routeService;
 
   const timeSlots = useMemo(() => ['09:00', '10:30', '12:00', '13:30', '15:00', '16:30'], []);
 
@@ -35,7 +35,7 @@ export default function Booking() {
         if (active) {
           setServices(response.data.map((service) => {
             const mapped = mapServiceFromApi(service);
-            return { ...mapped, image: imageByName.get(mapped.name) ?? mapped.image };
+            return mapped;
           }));
         }
       })
@@ -49,10 +49,10 @@ export default function Booking() {
   }, [fallbackServices]);
 
   useEffect(() => {
-    if (selectedService?.id) {
-      setForm((current) => ({ ...current, serviceId: selectedService.id }));
+    if (routeService?.id) {
+      setForm((current) => ({ ...current, serviceId: routeService.id }));
     }
-  }, [selectedService?.id]);
+  }, [routeService?.id]);
 
   const update = (event) => {
     setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
@@ -61,6 +61,11 @@ export default function Booking() {
   const submit = async (event) => {
     event.preventDefault();
     setError('');
+    setSubmitted(false);
+    if (!Number.isInteger(Number(form.serviceId)) || Number(form.serviceId) <= 0) {
+      setError('Booking is unavailable until services load from the server. Please try again.');
+      return;
+    }
 
     try {
       await api.post('/appointments', {
@@ -74,12 +79,12 @@ export default function Booking() {
         notes: form.notes || null
       });
       setSubmitted(true);
-    } catch {
-      dispatch(addBooking(form));
-      setSubmitted(true);
-      setError('Saved locally because the booking API is not reachable yet.');
+    } catch (error) {
+      setError(error.response?.data?.message || 'Booking was not saved. Please try again when the server is available.');
     }
   };
+
+  if (!selectedService) return <p className="page section">This service is unavailable. Please choose a service from the Services page.</p>;
 
   return (
     <section className="page section booking-layout">
@@ -92,7 +97,8 @@ export default function Booking() {
             src={normalizeImageUrl(selectedService.image)}
             alt={selectedService.name}
             onError={(event) => {
-              event.currentTarget.src = '/service-images/photo_2026-08-20_18-30-46.jpg';
+              const fallback = '/service-images/photo_2026-08-20_18-30-46.jpg';
+              if (!event.currentTarget.src.endsWith(fallback)) event.currentTarget.src = fallback;
             }}
           />
           <div>
@@ -150,7 +156,7 @@ export default function Booking() {
           <textarea name="notes" value={form.notes} onChange={update} rows="4" />
         </label>
         <button className="button full" type="submit">Confirm Booking</button>
-        {submitted && <p className="success">Booking received. Email and WhatsApp confirmation hooks are ready for API integration.</p>}
+        {submitted && <p className="success">Booking received and awaiting admin approval.</p>}
         {error && <p className="form-note">{error}</p>}
       </form>
     </section>

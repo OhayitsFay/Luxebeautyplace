@@ -7,7 +7,6 @@ import ServiceCard from '../components/ServiceCard.jsx';
 export default function Services() {
   const fallbackServices = useSelector((state) => state.salon.services);
   const [services, setServices] = useState(fallbackServices);
-  const imageByName = new Map(fallbackServices.map((service) => [service.name, service.image]));
 
   useEffect(() => {
     let active = true;
@@ -17,7 +16,7 @@ export default function Services() {
         if (active) {
           setServices(response.data.map((service) => {
             const mapped = mapServiceFromApi(service);
-            return { ...mapped, image: imageByName.get(mapped.name) ?? mapped.image };
+            return mapped;
           }));
         }
       })
@@ -34,7 +33,7 @@ export default function Services() {
     const category = service.category || 'Services';
     groups[category] = groups[category] ? [...groups[category], service] : [service];
     return groups;
-  }, {});
+  }, Object.create(null));
 
   return (
     <section className="page section">
@@ -51,6 +50,7 @@ export default function Services() {
           </div>
         </section>
       ))}
+      {!services.length && <p>No services are currently available. Please contact the salon.</p>}
     </section>
   );
 }

@@ -1,99 +1,53 @@
 # Luxe Beauty Place
 
-A service-based salon appointment booking site built with a React frontend and an ASP.NET Core Web API backend.
+React/Vite website with an ASP.NET Core 8 API and SQL Server Express database.
 
-## Stack
+## Run locally
 
-- Frontend: React, React Router, Axios, Redux Toolkit
-- Backend: ASP.NET Core Web API
-- Database target: SQL Server through Entity Framework Core
+Prerequisites: Node.js/npm, .NET 8 SDK, and a running SQL Server instance. Keep secrets in the ignored `backend/.env` file.
 
-## Project Structure
+From the project directory, open two PowerShell terminals:
 
-```text
-frontend/   React client app
-backend/    ASP.NET Core API
-database/   SQL Server starter schema
+```powershell
+cd backend
+dotnet run
 ```
 
-## Run Locally
-
-On Windows, you can start the frontend by double-clicking:
-
-```text
-start-frontend.bat
-```
-
-Frontend:
-
-```bash
+```powershell
 cd frontend
-npm install
-npm run dev
+npm.cmd install
+npm.cmd run dev
 ```
 
-Then open:
+Website: http://127.0.0.1:5173
 
-```text
-http://127.0.0.1:5173
+Admin: http://127.0.0.1:5173/#/admin
+
+API health: http://127.0.0.1:5117/api/health
+
+See [DATABASE-ADMIN-GUIDE.md](DATABASE-ADMIN-GUIDE.md) for account creation, sign-in, recovery, database tables, and configuration.
+
+## Verify
+
+```powershell
+cd frontend
+npm.cmd test
+npm.cmd run build
 ```
 
-Backend:
-
-```bash
+```powershell
 cd backend
-dotnet restore
-dotnet run
+dotnet build
 ```
 
-The backend is configured for a local SQL Server Express instance:
+With the API running, run `powershell -File frontend/scripts/check-api.ps1` from the project directory for read-only API, login, authorization, validation, and database image-path checks. It reads the initial admin credentials from the ignored `.env`; it does not change records. If you changed that account's password, the configured initial password will no longer pass this check.
 
-```text
-Server=.\SQLEXPRESS;Database=LuxeBeautyPlace;Trusted_Connection=True;Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True
-```
+Images served by Vite belong in `frontend/public`, not `frontend/src/public` or `backend/Data/public`. Service image URLs use `/service-images/filename.jpg`. The duplicate source folders are retained but are not the served asset directory.
 
-To create and seed the database from Command Prompt, run:
+Normal API startup creates an empty database and seeds services only when the service table is empty. Existing dashboard edits and admin passwords are preserved. `database/schema.sql` is an alternative fresh-database script and refuses existing salon tables; it is not a migration tool.
 
-```bat
-"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE" -S .\SQLEXPRESS -E -i database\schema.sql
-```
+## Limits Before Launch
 
-Then start the API and test the database connection:
+Contact email and opening hours still need the owner's real information. Booking email/WhatsApp notifications, automatic availability/conflict scheduling, production password-reset email delivery, and dashboard editors for products/gallery are not implemented. Admins review booking requests manually. Development password recovery requires the server setup code and must not be exposed publicly.
 
-```bash
-cd backend
-dotnet run
-```
-
-Open:
-
-```text
-http://127.0.0.1:5117/api/health
-http://127.0.0.1:5117/api/services
-```
-
-When the backend starts, it checks the `Services` table, adds the service category/price label columns if they are missing, and syncs the current salon price list into SQL Server.
-
-## Admin Access
-
-The admin page is hidden behind the small key icon in the footer.
-
-If no admin exists yet, open the hidden admin page from the key icon in the footer and create the first admin account with this setup code:
-
-```text
-LUXE-ADMIN-SETUP-2026
-```
-
-After the first admin exists, only a logged-in admin can create additional admin accounts.
-
-Admins can change their password from the dashboard. The forgot-password flow creates a temporary reset code for local development; in production, wire that code to email or SMS before launch.
-
-## Contact Placeholders
-
-- Logo: `[LOGO HERE]`
-- Slogan: `[SLOGAN HERE]`
-- Address: `[BUSINESS ADDRESS]`
-- Phone: `[PHONE NUMBER]`
-- WhatsApp: `[WHATSAPP NUMBER]`
-- Email: `[EMAIL ADDRESS]`
-- Opening hours: `[OPENING HOURS]`
+Before public deployment, replace local credentials and signing keys, configure permitted frontend origins and HTTPS, add request rate limiting, and plan database backups and migrations. The current configuration is for local development, not a production security guarantee.

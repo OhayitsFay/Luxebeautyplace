@@ -1,19 +1,27 @@
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { ArrowRight, BadgeCheck, CalendarDays, Star } from 'lucide-react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { api } from '../api/client.js';
-import { mapTestimonialFromApi } from '../api/mappers.js';
+import { mapServiceFromApi, mapTestimonialFromApi } from '../api/mappers.js';
 import ServiceCard from '../components/ServiceCard.jsx';
-import { addTestimonial } from '../store/salonSlice.js';
 
 export default function Home() {
-  const dispatch = useDispatch();
-  const { services, testimonials: fallbackTestimonials } = useSelector((state) => state.salon);
+  const { services: fallbackServices, testimonials: fallbackTestimonials } = useSelector((state) => state.salon);
+  const [services, setServices] = useState(fallbackServices);
+  const [error, setError] = useState('');
   const [testimonials, setTestimonials] = useState(fallbackTestimonials);
   const [reviewForm, setReviewForm] = useState({ name: '', rating: 5, review: '' });
   const [sent, setSent] = useState(false);
   const featured = services.slice(0, 3);
+
+  useEffect(() => {
+    let active = true;
+    api.get('/services').then(({ data }) => {
+      if (active) setServices(data.map(mapServiceFromApi));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -37,13 +45,15 @@ export default function Home() {
 
   const submitReview = async (event) => {
     event.preventDefault();
+    setError('');
+    setSent(false);
     const review = { ...reviewForm, rating: Number(reviewForm.rating) };
 
     try {
       await api.post('/testimonials', review);
     } catch {
-      dispatch(addTestimonial(review));
-      setTestimonials((current) => [{ ...review, id: crypto.randomUUID(), status: 'Pending' }, ...current]);
+      setError('Your review was not sent. Please try again when the server is available.');
+      return;
     }
 
     setReviewForm({ name: '', rating: 5, review: '' });
@@ -114,6 +124,7 @@ export default function Home() {
             </label>
             <button className="button full" type="submit">Send Review</button>
             {sent && <p className="success">Review sent for admin approval.</p>}
+            {error && <p className="form-error" role="alert">{error}</p>}
           </form>
         </div>
         <div className="review-list">

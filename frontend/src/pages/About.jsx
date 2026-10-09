@@ -1,7 +1,18 @@
 import { useSelector } from 'react-redux';
+import { useEffect, useState } from 'react';
+import { api } from '../api/client.js';
+import { normalizeImageUrl } from '../api/mappers.js';
 
 export default function About() {
-  const galleryItems = useSelector((state) => state.salon.galleryItems);
+  const fallbackGallery = useSelector((state) => state.salon.galleryItems);
+  const [galleryItems, setGalleryItems] = useState(fallbackGallery);
+  useEffect(() => {
+    let active = true;
+    api.get('/gallery').then(({ data }) => {
+      if (active) setGalleryItems(data.map((item) => ({ id: item.galleryPhotoId, title: item.title, type: item.category, image: normalizeImageUrl(item.imageUrl) })));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   return (
     <>
@@ -43,6 +54,7 @@ export default function About() {
             </figure>
           ))}
         </div>
+        {!galleryItems.length && <p>Salon gallery photos will appear here when published.</p>}
       </section>
     </>
   );
